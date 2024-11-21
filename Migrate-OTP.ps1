@@ -1,8 +1,11 @@
 ﻿##  Script name:   Migrate-OTP.ps1
 ##  Created on:    06/29/2022
-##  Version:       1.0
+##  Version:       1.1
 ##  Author:        Tim Seiffert
 ##  Purpose:       Migrate OTP Tokens from Sophos UTM to Sophos XG(S) Firewall
+
+# Add required assemblies
+Add-Type -AssemblyName System.Web
 
 #Willkommensgruß
 Write-Host "`nWillkommen beim automatisierten OTP Migrationsskript UTM -> XG !`n`n" -ForegroundColor Yellow
@@ -21,8 +24,11 @@ $XG_api_password = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.I
 $random = Get-Random -Maximum 999999999999 -Minimum 100000000000
 $uri_utm_api_otp = "https://" + $utm_webadmin + "/api/objects/authentication/otp_token/"
 $uri_utm_api_user = "https://" + $utm_webadmin + "/api/objects/aaa/user/"
-$uri_xg_api_otp_enable = "https://" + $xg_webadmin +"/webconsole/APIController?reqxml=<Request><Login><Username>" + $xg_api_user + "</Username><Password>" + $xg_api_password + "</Password></Login><Set operation=`"Update`"><OTPSettings><otp>1</otp><otpUserPortal>1</otpUserPortal><otpSSLVPN>1</otpSSLVPN><otpIPsec>1</otpIPsec></OTPSettings></Set></Request>"
 
+# Build and encode the OTP enable XML request
+$xmlPayloadEnable = "<Request><Login><Username>" + $xg_api_user + "</Username><Password>" + $xg_api_password + "</Password></Login><Set operation=`"Update`"><OTPSettings><otp>1</otp><otpUserPortal>1</otpUserPortal><otpSSLVPN>1</otpSSLVPN><otpIPsec>1</otpIPsec></OTPSettings></Set></Request>"
+$encodedPayloadEnable = [System.Web.HttpUtility]::UrlEncode($xmlPayloadEnable)
+$uri_xg_api_otp_enable = "https://" + $xg_webadmin + "/webconsole/APIController?reqxml=" + $encodedPayloadEnable
 
 #API Header
 $authorization_header_plain = "token:" + $utm_api_key
@@ -44,6 +50,7 @@ add-type @"
     }
 "@
 [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 #API Call Get OTP Token UTM
 Write-Host "Export wird durchgeführt..." -ForegroundColor yellow
@@ -76,17 +83,28 @@ Write-Host "`nStatuscode: " $response.response.OTPSettings.Status.code "`n" $res
 Write-Host "`n----------------------------------------------------" -ForegroundColor Yellow
 
 if ($hashtable.Count -ne 0){
-$hashtable | ForEach-Object {
-    $random = Get-Random -Maximum 999999999999 -Minimum 100000000000
-    $uri_xg_api_otp_add_token = "https://" + $xg_webadmin +"/webconsole/APIController?reqxml=<Request><Login><Username>" + $xg_api_user + "</Username><Password>" + $xg_api_password + "</Password></Login><Set operation=`"Add`"><OTPTokens><secret>" + $_.Key + "</secret><user>" + $_.Value + " </user><autoCreated>1</autoCreated><active>1</active><tokenid>" + $random + "</tokenid></OTPTokens></Set></Request>"
-    $response = Invoke-RestMethod -Uri $uri_xg_api_otp_add_token -Method GET
-    #    Write-Host "Debug:" $uri_xg_api_otp_add_token
-    Write-Host "Response zum API Request`nToken"  -ForegroundColor Yellow 
-    Write-Host $_.Key
-    Write-Host "`nUser" -ForegroundColor Yellow
-    Write-Host $_.Value
-    Write-Host "`nStatuscode: " $response.response.OTPTokens.Status.code "`n" $response.response.OTPTokens.Status.'#text'-ForegroundColor Yellow
-    Write-Host "`n----------------------------------------------------" -ForegroundColor Yellow
-}
-Write-Host "`n`n...done!" -ForegroundColor Green
+    $hashtable | ForEach-Object {
+        $random = Get-Random -Maximum 999999999999 -Minimum 100000000000
+        
+        # Create the XML payload first
+        $xmlPayload = "<Request><Login><Username>" + $xg_api_user + "</Username><Password>" + $xg_api_password + "</Password></Login><Set operation=`"Add`"><OTPTokens><secret>" + $_.Key + "</secret><user>" + $_.Value.Trim() + "</user><autoCreated>1</autoCreated><active>1</active><tokenid>" + $random + "</tokenid></OTPTokens></Set></Request>"
+        
+        # URL encode the XML payload
+        $encodedPayload = [System.Web.HttpUtility]::UrlEncode($xmlPayload)
+        
+        # Build the final URL
+        $uri_xg_api_otp_add_token = "https://" + $xg_webadmin + "/webconsole/APIController?reqxml=" + $encodedPayload
+        
+        # Make the request
+        $response = Invoke-RestMethod -Uri $uri_xg_api_otp_add_token -Method GET
+        
+        Write-Host "Debug:" $uri_xg_api_otp_add_token
+        Write-Host "Response zum API Request`nToken"  -ForegroundColor Yellow 
+        Write-Host $_.Key
+        Write-Host "`nUser" -ForegroundColor Yellow
+        Write-Host $_.Value
+        Write-Host "`nStatuscode: " $response.response.OTPTokens.Status.code "`n" $response.response.OTPTokens.Status.'#text' -ForegroundColor Yellow
+        Write-Host "`n----------------------------------------------------" -ForegroundColor Yellow
+    }
+    Write-Host "`n`n...done!" -ForegroundColor Green
 }
